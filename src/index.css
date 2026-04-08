@@ -1,0 +1,12 @@
+@import "tailwindcss";
+@import "react-image-crop/dist/ReactCrop.css";
+
+@theme {
+  --font-sans: "Inter", ui-sans-serif, system-ui, sans-serif;
+}
+
+body {
+  background-color: #050505;
+  color: #ffffff;
+  font-family: var(--font-sans);
+}

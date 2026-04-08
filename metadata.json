@@ -1,0 +1,8 @@
+{
+  "name": "SnipText Cross-Platform",
+  "description": "A sleek, cross-platform mobile and web app to crop images and extract text using AI. Supports drawing over other apps on Android.",
+  "requestFramePermissions": [
+    "camera",
+    "display-capture"
+  ]
+}
