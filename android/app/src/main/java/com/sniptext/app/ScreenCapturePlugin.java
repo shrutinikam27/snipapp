@@ -30,12 +30,7 @@ import android.view.View;
 import android.view.Window;
 
 import java.io.ByteArrayOutputStream;
-import java.io.File;
-import java.io.FileOutputStream;
-import java.io.FileInputStream;
 import java.nio.ByteBuffer;
-import android.graphics.BitmapFactory;
-import android.util.Log;
 
 @CapacitorPlugin(name = "ScreenCapture")
 public class ScreenCapturePlugin extends Plugin {
@@ -47,23 +42,14 @@ public class ScreenCapturePlugin extends Plugin {
     private android.graphics.RectF pendingRect = null;
     
     private static JSObject pendingCaptureVal = null;
-    private static final String CACHE_FILENAME = "pending_snip.jpg";
 
     @PluginMethod
     public void checkPendingCapture(PluginCall call) {
         if (pendingCaptureVal != null) {
             call.resolve(pendingCaptureVal);
             pendingCaptureVal = null;
-            clearCacheFile();
         } else {
-            // Try fallback from storage
-            JSObject cached = loadFromCache();
-            if (cached != null) {
-                call.resolve(cached);
-                clearCacheFile();
-            } else {
-                call.resolve();
-            }
+            call.resolve();
         }
     }
 
@@ -77,12 +63,25 @@ public class ScreenCapturePlugin extends Plugin {
     }
 
     private void handleBubbleCapture(android.graphics.RectF rect) {
+        if (rect == null || rect.width() <= 10 || rect.height() <= 10) {
+            android.util.Log.d("ScreenCapture", "handleBubbleCapture: Ignoring small or null rect");
+            return;
+        }
+        android.util.Log.d("ScreenCapture", "handleBubbleCapture: Processing snip " + rect.toString());
         getActivity().runOnUiThread(() -> {
             this.pendingRect = rect;
             if (mediaProjection != null) {
+                // Flash message to user - Safe check
+                if (getContext() != null) {
+                    android.widget.Toast.makeText(getContext(), "Processing Snip...", android.widget.Toast.LENGTH_SHORT).show();
+                }
                 takeScreenshot(null, rect);
                 this.pendingRect = null;
             } else {
+                android.util.Log.d("ScreenCapture", "handleBubbleCapture: MediaProjection null, requesting...");
+                if (getContext() != null) {
+                    android.widget.Toast.makeText(getContext(), "Permission needed", android.widget.Toast.LENGTH_SHORT).show();
+                }
                 startCapture(null);
             }
         });
@@ -90,24 +89,20 @@ public class ScreenCapturePlugin extends Plugin {
 
     @PluginMethod
     public void enableFloating(PluginCall call) {
+        android.util.Log.d("ScreenCapture", "enableFloating: Requesting bubble...");
         getActivity().runOnUiThread(() -> {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
                 if (!android.provider.Settings.canDrawOverlays(getContext())) {
-                    // Help for Android 13+ restricted settings
-                    if (Build.VERSION.SDK_INT >= 33) {
-                         android.widget.Toast.makeText(getContext(), "If switch is disabled, Go to App Info -> 3 dots -> Allow restricted settings", android.widget.Toast.LENGTH_LONG).show();
-                    }
-                    
+                    android.util.Log.w("ScreenCapture", "enableFloating: Missing overlay permission!");
                     Intent intent = new Intent(android.provider.Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
                             android.net.Uri.parse("package:" + getContext().getPackageName()));
-                    // Ensure the intent opens even if it's buried
-                    intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
                     getActivity().startActivity(intent);
-                    call.reject("Overlay Permission needed. Check App Info if restricted.");
+                    call.reject("Overlay Permission not granted");
                     return;
                 }
             }
 
+            android.util.Log.d("ScreenCapture", "enableFloating: Starting service...");
             Intent intent = new Intent(getContext(), ScreenCaptureService.class);
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                 getContext().startForegroundService(intent);
@@ -121,17 +116,20 @@ public class ScreenCapturePlugin extends Plugin {
                 public void run() {
                     ScreenCaptureService service = ScreenCaptureService.getInstance();
                     if (service != null) {
+                        android.util.Log.d("ScreenCapture", "enableFloating: Service found, showing bubble");
                         service.showFloatingBubble(rect -> handleBubbleCapture(rect));
                         android.widget.Toast.makeText(getContext(), "Floating mode enabled!", android.widget.Toast.LENGTH_SHORT).show();
                         call.resolve();
-                    } else if (retries < 10) {
+                    } else if (retries < 15) {
                         retries++;
+                        android.util.Log.d("ScreenCapture", "enableFloating: Waiting for service... retry " + retries);
                         new Handler(Looper.getMainLooper()).postDelayed(this, 300);
                     } else {
-                        call.reject("Could not enable floating mode.");
+                        android.util.Log.e("ScreenCapture", "enableFloating: TIMEOUT waiting for service");
+                        call.reject("Could not enable floating mode (service timeout).");
                     }
                 }
-            }, 300);
+            }, 500);
         });
     }
 
@@ -178,7 +176,7 @@ public class ScreenCapturePlugin extends Plugin {
             snippingView.setTag("snipOverlayInApp");
             rootView.addView(snippingView, new android.widget.FrameLayout.LayoutParams(-1, -1));
             // Let user know they can drag
-            android.widget.Toast.makeText(getContext(), "Drag area to extract text", android.widget.Toast.LENGTH_SHORT).show();
+            android.widget.Toast.makeText(getContext(), "Drag to snip, tap to cancel", 1).show();
         });
     }
 
@@ -188,23 +186,17 @@ public class ScreenCapturePlugin extends Plugin {
             int y = Math.max(0, (int) rect.top);
             int w = Math.min(sw - x, (int) rect.width());
             int h = Math.min(sh - y, (int) rect.height());
-            final Bitmap finalBitmap = (w > 0 && h > 0) ? Bitmap.createBitmap(bitmap, x, y, w, h) : bitmap;
+            Bitmap cropped = (w > 0 && h > 0) ? Bitmap.createBitmap(bitmap, x, y, w, h) : bitmap;
             
             ByteArrayOutputStream os = new ByteArrayOutputStream();
-            finalBitmap.compress(Bitmap.CompressFormat.JPEG, 90, os);
+            cropped.compress(Bitmap.CompressFormat.JPEG, 90, os);
             String base64 = Base64.encodeToString(os.toByteArray(), Base64.NO_WRAP);
             
             JSObject ret = new JSObject();
             ret.put("value", "data:image/jpeg;base64," + base64);
-            
-            getActivity().runOnUiThread(() -> {
-                pendingCaptureVal = ret;
-                saveToCache(finalBitmap);
-                saveToGallery(finalBitmap);
-                notifyListeners("onCaptureResult", ret);
-                if (call != null) call.resolve(ret);
-                bringAppToFront();
-            });
+            pendingCaptureVal = ret;
+            notifyListeners("onCaptureResult", ret);
+            call.resolve(ret);
         } catch (Exception e) {
             call.reject(e.getMessage());
         }
@@ -216,9 +208,13 @@ public class ScreenCapturePlugin extends Plugin {
             getActivity().runOnUiThread(() -> {
                 ScreenCaptureService service = ScreenCaptureService.getInstance();
                 if (service != null) {
-                    service.showOverlay(rect -> takeScreenshot(call, rect));
+                    service.showOverlay(rect -> {
+                        android.util.Log.d("ScreenCapture", "Overlay snip complete, taking screenshot...");
+                        takeScreenshot(call, rect);
+                    });
                     new Handler(Looper.getMainLooper()).postDelayed(() -> getActivity().moveTaskToBack(true), 300);
                 } else {
+                    android.util.Log.e("ScreenCapture", "service is NULL in startCapture!");
                     if (call != null) call.reject("Service not active");
                 }
             });
@@ -251,7 +247,8 @@ public class ScreenCapturePlugin extends Plugin {
                     Intent captureIntent = projectionManager.createScreenCaptureIntent();
                     startActivityForResult(call, captureIntent, "captureResult");
                 } catch (Exception e) {
-                    call.reject("Failed to start capture: " + e.getMessage());
+                    android.util.Log.e("ScreenCapture", "Exception in startCapture: " + e.getMessage());
+                    if (call != null) call.reject("Failed to start capture: " + e.getMessage());
                 }
             }
         });
@@ -259,60 +256,108 @@ public class ScreenCapturePlugin extends Plugin {
 
     @ActivityCallback
     public void captureResult(PluginCall call, ActivityResult result) {
+        android.util.Log.d("ScreenCapture", "captureResult: resultCode=" + result.getResultCode());
         if (result.getResultCode() == Activity.RESULT_OK && result.getData() != null) {
-            mediaProjection = projectionManager.getMediaProjection(result.getResultCode(), result.getData());
-            mediaProjection.registerCallback(new MediaProjection.Callback() {
-                @Override
-                public void onStop() {
-                    stopCapture();
+            try {
+                mediaProjection = projectionManager.getMediaProjection(result.getResultCode(), result.getData());
+                if (mediaProjection == null) {
+                    android.util.Log.e("ScreenCapture", "mediaProjection is NULL after getMediaProjection!");
+                    if (call != null) call.reject("Failed to get MediaProjection (null)");
+                    return;
                 }
-            }, new Handler(Looper.getMainLooper()));
+                
+                android.util.Log.d("ScreenCapture", "mediaProjection successfully initialized");
+                
+                mediaProjection.registerCallback(new MediaProjection.Callback() {
+                    @Override
+                    public void onStop() {
+                        android.util.Log.d("ScreenCapture", "MediaProjection stopped by system");
+                        stopCapture();
+                    }
+                }, new Handler(Looper.getMainLooper()));
 
-            new Handler(Looper.getMainLooper()).postDelayed(() -> {
-                ScreenCaptureService service = ScreenCaptureService.getInstance();
-                if (service != null) {
-                    service.showOverlay(rect -> takeScreenshot(call, rect));
-                    getActivity().moveTaskToBack(true);
-                }
-            }, 500);
+                new Handler(Looper.getMainLooper()).postDelayed(() -> {
+                    ScreenCaptureService service = ScreenCaptureService.getInstance();
+                    if (service != null) {
+                        android.util.Log.d("ScreenCapture", "Service active, showing overlay...");
+                        service.showOverlay(rect -> takeScreenshot(call, rect));
+                        getActivity().moveTaskToBack(true);
+                    } else {
+                        android.util.Log.e("ScreenCapture", "Service NOT found in captureResult!");
+                        if (call != null) call.reject("Screen capture service not ready");
+                    }
+                }, 500);
+            } catch (Exception e) {
+                android.util.Log.e("ScreenCapture", "Error in captureResult: " + e.getMessage());
+                if (call != null) call.reject("Failed to initialize capture: " + e.getMessage());
+            }
         } else {
+            android.util.Log.w("ScreenCapture", "Capture permission denied or cancelled");
             if (call != null) call.reject("User cancelled");
         }
     }
 
     private void takeScreenshot(final PluginCall call, final android.graphics.RectF snipRect) {
-        if (mediaProjection == null) return;
+        if (mediaProjection == null) {
+            android.util.Log.e("ScreenCapture", "takeScreenshot: No MediaProjection!");
+            if (getContext() != null) {
+                android.widget.Toast.makeText(getContext(), "Capture failed: No permission", android.widget.Toast.LENGTH_SHORT).show();
+            }
+            return;
+        }
+
+        android.util.Log.d("ScreenCapture", "takeScreenshot: Starting capture process...");
 
         DisplayMetrics metrics = new DisplayMetrics();
         WindowManager wm = (WindowManager) getContext().getSystemService(Context.WINDOW_SERVICE);
         wm.getDefaultDisplay().getRealMetrics(metrics);
         int w = metrics.widthPixels, h = metrics.heightPixels;
 
+        android.util.Log.d("ScreenCapture", "takeScreenshot: Screen size " + w + "x" + h + " dpi=" + metrics.densityDpi);
+
         imageReader = ImageReader.newInstance(w, h, PixelFormat.RGBA_8888, 2);
         virtualDisplay = mediaProjection.createVirtualDisplay("Snip", w, h, metrics.densityDpi, 
                 DisplayManager.VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR, imageReader.getSurface(), null, null);
 
+        android.util.Log.d("ScreenCapture", "takeScreenshot: VirtualDisplay created");
+
         // Hide overlay AFTER virtual display is attached so the screen redraws and pushes a frame!
         ScreenCaptureService service = ScreenCaptureService.getInstance();
         if (service != null) {
-            getActivity().runOnUiThread(() -> service.hideOverlay());
+            android.util.Log.d("ScreenCapture", "takeScreenshot: Hiding overlay to trigger frame");
+            service.hideOverlay();
         }
 
         imageReader.setOnImageAvailableListener(reader -> {
-            Image img = null;
+            android.util.Log.d("ScreenCapture", "onImageAvailable: Frame received!");
             try {
-                if (imageReader == null) return;
-                img = reader.acquireLatestImage();
+                Image img = reader.acquireNextImage(); 
                 if (img != null) {
+                    android.util.Log.d("ScreenCapture", "onImageAvailable: Processing image...");
                     processCapturedImage(call, img, snipRect, w, h);
+                    img.close();
+                    cleanupVirtualResources();
+                } else {
+                    android.util.Log.w("ScreenCapture", "onImageAvailable: Received NULL image");
                 }
             } catch (Exception e) {
+                android.util.Log.e("ScreenCapture", "Capture listener error: " + e.getMessage());
                 if (call != null) call.reject("Failed to capture frame: " + e.getMessage());
-            } finally {
-                if (img != null) img.close();
-                getActivity().runOnUiThread(() -> cleanupVirtualResources());
+                cleanupVirtualResources();
             }
         }, new Handler(Looper.getMainLooper()));
+        
+        // Timeout mechanism: If no frame arrives in 3 seconds, cleanup and log error
+        new Handler(Looper.getMainLooper()).postDelayed(() -> {
+            if (virtualDisplay != null) {
+                android.util.Log.e("ScreenCapture", "TIMEOUT: No frame received from virtual display");
+                if (getContext() != null) {
+                    android.widget.Toast.makeText(getContext(), "Capture timeout. Try moving the screen slightly.", android.widget.Toast.LENGTH_SHORT).show();
+                }
+                cleanupVirtualResources();
+                if (call != null) call.reject("Capture timeout");
+            }
+        }, 4000); // Increased to 4s
     }
 
     private void processCapturedImage(PluginCall call, Image image, android.graphics.RectF rect, int w, int h) {
@@ -327,21 +372,23 @@ public class ScreenCapturePlugin extends Plugin {
             bmp.copyPixelsFromBuffer(buffer);
             Bitmap full = Bitmap.createBitmap(bmp, 0, 0, w, h);
             
-            final Bitmap finalCropped = (rect != null) ? createCroppedBitmap(full, rect, w, h) : full;
+            Bitmap cropped = full;
+            if (rect != null) {
+                int rx = Math.max(0, (int) rect.left);
+                int ry = Math.max(0, (int) rect.top);
+                int rw = Math.min(w - rx, (int) rect.width());
+                int rh = Math.min(h - ry, (int) rect.height());
+                if (rw > 0 && rh > 0) cropped = Bitmap.createBitmap(full, rx, ry, rw, rh);
+            }
 
             ByteArrayOutputStream os = new ByteArrayOutputStream();
-            finalCropped.compress(Bitmap.CompressFormat.JPEG, 90, os);
+            cropped.compress(Bitmap.CompressFormat.JPEG, 90, os);
             JSObject obj = new JSObject();
             obj.put("value", "data:image/jpeg;base64," + Base64.encodeToString(os.toByteArray(), Base64.NO_WRAP));
-            
-            getActivity().runOnUiThread(() -> {
-                pendingCaptureVal = obj;
-                saveToCache(finalCropped);
-                saveToGallery(finalCropped);
-                notifyListeners("onCaptureResult", obj);
-                if (call != null) call.resolve(obj);
-                bringAppToFront();
-            });
+            pendingCaptureVal = obj;
+            notifyListeners("onCaptureResult", obj);
+            if (call != null) call.resolve(obj);
+            bringAppToFront();
         } catch (Exception e) {
             if (call != null) call.reject(e.getMessage());
         }
@@ -349,63 +396,13 @@ public class ScreenCapturePlugin extends Plugin {
 
     private void bringAppToFront() {
         new Handler(Looper.getMainLooper()).postDelayed(() -> {
-            try {
-                Context context = getContext();
-                Intent intent = context.getPackageManager().getLaunchIntentForPackage(context.getPackageName());
-                if (intent != null) {
-                    intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_SINGLE_TOP | Intent.FLAG_ACTIVITY_REORDER_TO_FRONT);
-                    context.startActivity(intent);
-                    
-                    // Xiaomi/MIUI hack: sometimes we need to start it again if it was buried
-                    new Handler(Looper.getMainLooper()).postDelayed(() -> {
-                         context.startActivity(intent);
-                    }, 200);
-                }
-            } catch (Exception e) {
-                android.util.Log.e("ScreenCapture", "Failed to bring app to front: " + e.getMessage());
+            Context context = getContext();
+            Intent intent = context.getPackageManager().getLaunchIntentForPackage(context.getPackageName());
+            if (intent != null) {
+                intent.setFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_REORDER_TO_FRONT);
+                context.startActivity(intent);
             }
-        }, 300);
-    }
-
-    private void saveToCache(Bitmap bitmap) {
-        try {
-            File file = new File(getContext().getCacheDir(), CACHE_FILENAME);
-            FileOutputStream fos = new FileOutputStream(file);
-            bitmap.compress(Bitmap.CompressFormat.JPEG, 90, fos);
-            fos.close();
-        } catch (Exception e) {
-            Log.e("ScreenCapture", "Failed to save cache: " + e.getMessage());
-        }
-    }
-
-    private JSObject loadFromCache() {
-        try {
-            File file = new File(getContext().getCacheDir(), CACHE_FILENAME);
-            if (!file.exists()) return null;
-
-            FileInputStream fis = new FileInputStream(file);
-            Bitmap bitmap = BitmapFactory.decodeStream(fis);
-            fis.close();
-
-            if (bitmap != null) {
-                ByteArrayOutputStream os = new ByteArrayOutputStream();
-                bitmap.compress(Bitmap.CompressFormat.JPEG, 90, os);
-                String base64 = Base64.encodeToString(os.toByteArray(), Base64.NO_WRAP);
-                JSObject ret = new JSObject();
-                ret.put("value", "data:image/jpeg;base64," + base64);
-                return ret;
-            }
-        } catch (Exception e) {
-            Log.e("ScreenCapture", "Failed to load from cache: " + e.getMessage());
-        }
-        return null;
-    }
-
-    private void clearCacheFile() {
-        try {
-            File file = new File(getContext().getCacheDir(), CACHE_FILENAME);
-            if (file.exists()) file.delete();
-        } catch (Exception e) {}
+        }, 500);
     }
 
     private void cleanupVirtualResources() {
@@ -417,44 +414,6 @@ public class ScreenCapturePlugin extends Plugin {
         cleanupVirtualResources();
         if (mediaProjection != null) { mediaProjection.stop(); mediaProjection = null; }
         stopService();
-    }
-
-    private Bitmap createCroppedBitmap(Bitmap full, android.graphics.RectF rect, int w, int h) {
-        int rx = Math.max(0, (int) rect.left);
-        int ry = Math.max(0, (int) rect.top);
-        int rw = Math.min(w - rx, (int) rect.width());
-        int rh = Math.min(h - ry, (int) rect.height());
-        if (rw > 0 && rh > 0) return Bitmap.createBitmap(full, rx, ry, rw, rh);
-        return full;
-    }
-
-    private void saveToGallery(Bitmap bitmap) {
-        try {
-            String filename = "SnipText_" + System.currentTimeMillis() + ".jpg";
-            android.content.ContentValues values = new android.content.ContentValues();
-            values.put(android.provider.MediaStore.Images.Media.DISPLAY_NAME, filename);
-            values.put(android.provider.MediaStore.Images.Media.MIME_TYPE, "image/jpeg");
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                values.put(android.provider.MediaStore.Images.Media.RELATIVE_PATH, android.os.Environment.DIRECTORY_PICTURES + "/SnipText");
-                values.put(android.provider.MediaStore.Images.Media.IS_PENDING, 1);
-            }
-
-            android.net.Uri collection = android.provider.MediaStore.Images.Media.EXTERNAL_CONTENT_URI;
-            android.net.Uri item = getContext().getContentResolver().insert(collection, values);
-
-            if (item != null) {
-                try (java.io.OutputStream out = getContext().getContentResolver().openOutputStream(item)) {
-                    bitmap.compress(Bitmap.CompressFormat.JPEG, 95, out);
-                }
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                    values.clear();
-                    values.put(android.provider.MediaStore.Images.Media.IS_PENDING, 0);
-                    getContext().getContentResolver().update(item, values, null, null);
-                }
-            }
-        } catch (Exception e) {
-            Log.e("ScreenCapture", "Failed to save to gallery: " + e.getMessage());
-        }
     }
 
     private void stopService() {

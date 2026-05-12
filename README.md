@@ -4,14 +4,18 @@ A sleek, modern web application that allows users to capture screens, take photo
 
 ## ✨ Features Implemented
 
-*   🖥️ **Native Screen Capture**: Multi-mode capture system supporting both "Within App" and OS-wide "Entire Screen" extraction.
-*   🫧 **Branded Floating Bubble**: A persistent overlay with the official SnipText icon that follows you across apps. Featuring micro-animations (scale-up on touch, magnetic snap-to-close).
-*   📐 **Interactive Snipping Overlay**: Hardware-accelerated "draw-to-snip" mask for precise text selection directly over any app or website.
-*   🔄 **Aggressive Foreground Recovery**: Custom intent-routing to forcefully bring SnipText to the front after a capture, optimized with auto-retry logic for background activity starts.
-*   💾 **Public Gallery Integration**: Every capture is automatically timestamped and saved into a dedicated `Pictures/SnipText` folder in your device's memory.
-*   🧲 **Magnetic Snap-to-Close**: A user-friendly "X" zone at the bottom of the screen with a magnetic pulling effect to easily dismiss the floating bubble.
-*   📸 **Smart OCR Pipeline**: Powered by `gemini-2.0-flash`, processing high-resolution snippets with state-of-the-art text accuracy.
-*   📚 **History & Persistence**: Recent captures and extractions are saved locally for offline review.
+*   🖥️ **Native Screen Capture**: Built a custom Capacitor plugin utilizing Android's `MediaProjection` API to securely capture content across the entire OS, optimized for real-time frame synchronization.
+*   🫧 **Floating Quick Snip Bubble**: A persistent System Alert Window overlay that hovers across all of your Android apps, allowing you to instantly trigger a screen snip without opening the SnipText app.
+*   📐 **Interactive Snipping Overlay**: A native, hardware-accelerated dark overlay that lets you draw a precise "cutout" mask directly over your screen to capture only the exact content you care about.
+*   🔄 **Foreground Recovery & Instant Routing**: Engineered highly resilient Android Intent and PendingIntent mechanisms (with Android 14+ background activity overrides) to forcefully snap the SnipText app back to the foreground and instantly route your snippet to the "Extract View" the second you lift your finger.
+*   🛠️ **High Compatibility Fixes**: Implemented critical rendering and lifecycle fixes specifically for restrictive OEM environments (like Xiaomi/MIUI), ensuring the snipping overlay remains visible and active.
+*   📳 **Haptic Feedback**: Integrated native vibration support to provide tactile confirmation when a screen snip is successfully captured.
+*   📸 **In-App Camera & Gallery**: Capture images directly from your device's camera using a custom viewfinder, or select files from your gallery.
+*   ⚡ **Image Optimization**: Automatically scales and compresses high-resolution mobile photos to ensure lightning-fast AI extraction without hanging or crashing.
+*   🤖 **AI Text Extraction**: Powered by Google's Gemini AI (`gemini-2.0-flash` / `gemini-1.5-flash` models) for high-speed, accurate text extraction from images.
+*   📚 **Recent Snips History**: Automatically saves your most recent snippets and their extracted text to local storage so you never lose an important capture.
+*   📋 **Copy to Clipboard**: One-click copy of the extracted text for immediate use.
+*   🎨 **Modern UI**: Sleek, responsive design built with Tailwind CSS, featuring smooth transitions and animations.
 
 ## 🛠️ Tech Stack
 
@@ -102,16 +106,6 @@ npx cap run android
 ```
 
 Or install the APK manually by transferring it to your phone and enabling **Install Unknown Apps** in your phone settings.
-
----
-
-## 🛠️ Xiaomi/MIUI Troubleshooting
-
-Xiaomi devices (Redmi, Poco, Mi) have extra security layers that might block background app transitions. If the app doesn't snap back to the front after a snip, please enable these permissions:
-
-1. **Overlay Permission**: If the floating bubble doesn't appear, enable "Display over other apps".
-2. **Background activity start**: Go to **App Info** -> **Permissions** -> **Other permissions** -> **"Display pop-up windows while running in the background"** and set it to **"Always allow"**.
-3. **Restricted Settings**: On Android 13+, if you can't toggle the switch, go to **App Info** -> **3 Dots (top right)** -> **"Allow restricted settings"** first.
 
 ---
 

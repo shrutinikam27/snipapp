@@ -25,12 +25,9 @@ public class ScreenCaptureService extends Service {
     private SnippingOverlayView overlayView;
     private android.widget.ImageView floatingBubble;
     private android.widget.LinearLayout optionsMenu;
-    private android.widget.TextView closeTarget;
     private static ScreenCaptureService instance;
     private float initialX, initialY, initialTouchX, initialTouchY;
     private boolean isMenuOpen = false;
-    private boolean isOverCloseTarget = false;
-    private SnippingOverlayView.OnSnipListener currentSnipListener;
 
     public static ScreenCaptureService getInstance() {
         return instance;
@@ -58,21 +55,33 @@ public class ScreenCaptureService extends Service {
     }
 
     public void showFloatingBubble(SnippingOverlayView.OnSnipListener listener) {
-        if (floatingBubble != null) return;
-        this.currentSnipListener = listener;
+        android.util.Log.d("ScreenCaptureService", "showFloatingBubble called");
+        if (floatingBubble != null) {
+            android.util.Log.d("ScreenCaptureService", "Bubble already exists, skipping");
+            return;
+        }
 
         floatingBubble = new android.widget.ImageView(this);
+        // Use a more reliable icon and styling
+        floatingBubble.setImageResource(android.R.drawable.ic_menu_camera); 
+        floatingBubble.setBackgroundColor(android.graphics.Color.parseColor("#6366f1")); // Indigo-600
+        floatingBubble.setPadding(25, 25, 25, 25);
         
-        // Use the official app icon for the floating bubble from our app's resources
-        floatingBubble.setImageResource(com.sniptext.app.R.mipmap.ic_launcher_round); 
-        
-        // Circular styling with shadow
+        // Make it circular
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
-            floatingBubble.setElevation(20f);
+            floatingBubble.setElevation(20);
+            floatingBubble.setOutlineProvider(new android.view.ViewOutlineProvider() {
+                @Override
+                public void getOutline(android.view.View view, android.graphics.Outline outline) {
+                    outline.setOval(0, 0, view.getWidth(), view.getHeight());
+                }
+            });
+            floatingBubble.setClipToOutline(true);
         }
 
         final WindowManager.LayoutParams params = new WindowManager.LayoutParams(
-                150, 150, // Slightly larger to show the app icon clearly
+                160, // Fixed size for reliability
+                160,
                 Build.VERSION.SDK_INT >= Build.VERSION_CODES.O ?
                         WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY :
                         WindowManager.LayoutParams.TYPE_PHONE,
@@ -81,7 +90,7 @@ public class ScreenCaptureService extends Service {
 
         params.gravity = Gravity.TOP | Gravity.START;
         params.x = 100;
-        params.y = 100;
+        params.y = 300;
 
         floatingBubble.setOnTouchListener(new android.view.View.OnTouchListener() {
             @Override
@@ -92,200 +101,83 @@ public class ScreenCaptureService extends Service {
                         initialY = params.y;
                         initialTouchX = event.getRawX();
                         initialTouchY = event.getRawY();
-                        
-                        // Scale up on touch
-                        floatingBubble.animate().scaleX(1.2f).scaleY(1.2f).setDuration(100).start();
-                        
-                        showCloseTarget();
                         return true;
                     case android.view.MotionEvent.ACTION_UP:
-                        // Scale back down
-                        floatingBubble.animate().scaleX(1.0f).scaleY(1.0f).setDuration(100).start();
-                        
-                        boolean droppedToClose = isOverCloseTarget;
-                        hideCloseTarget();
-                        
-                        if (droppedToClose) {
-                            destroyBubble();
-                            stopSelf();
-                            return true;
-                        }
-
-                        // Check if it was a click instead of a drag
-                        float endX = event.getRawX();
-                        float endY = event.getRawY();
-                        if (Math.abs(endX - initialTouchX) < 15 && Math.abs(endY - initialTouchY) < 15) {
+                        int diffX = (int) (event.getRawX() - initialTouchX);
+                        int diffY = (int) (event.getRawY() - initialTouchY);
+                        if (Math.abs(diffX) < 15 && Math.abs(diffY) < 15) {
+                            android.util.Log.d("ScreenCaptureService", "Bubble clicked!");
                             if (!isMenuOpen) {
-                                showOptionsMenu(params.x, params.y);
+                                showOptionsMenu(params.x, params.y, listener);
                             } else {
                                 hideOptionsMenu();
                             }
                         }
                         return true;
-
                     case android.view.MotionEvent.ACTION_MOVE:
-                        float moveX = event.getRawX();
-                        float moveY = event.getRawY();
-                        
-                        params.x = (int) (initialX + (moveX - initialTouchX));
-                        params.y = (int) (initialY + (moveY - initialTouchY));
-                        
-                        // Check collision with close target
-                        checkCloseTargetCollision(moveX, moveY);
-                        
-                        // Magnetic effect: if near close target, snap the bubble visually
-                        if (isOverCloseTarget) {
-                            android.util.DisplayMetrics m = getResources().getDisplayMetrics();
-                            params.x = (int) (m.widthPixels / 2f - 75); // Center horizontally
-                            params.y = (int) (m.heightPixels - 300); // Near the bottom X
-                        }
-                        
-                        windowManager.updateViewLayout(floatingBubble, params);
+                        params.x = (int) (initialX + (event.getRawX() - initialTouchX));
+                        params.y = (int) (initialY + (event.getRawY() - initialTouchY));
+                        try {
+                            windowManager.updateViewLayout(floatingBubble, params);
+                        } catch (Exception e) {}
                         return true;
                 }
                 return false;
             }
         });
 
-        windowManager.addView(floatingBubble, params);
-    }
-
-    private void showCloseTarget() {
-        if (closeTarget != null) return;
-        closeTarget = new android.widget.TextView(this);
-        closeTarget.setText("X");
-        closeTarget.setGravity(Gravity.CENTER);
-        closeTarget.setTextColor(android.graphics.Color.WHITE);
-        closeTarget.setTextSize(24);
-        
-        android.graphics.drawable.GradientDrawable shape = new android.graphics.drawable.GradientDrawable();
-        shape.setShape(android.graphics.drawable.GradientDrawable.OVAL);
-        shape.setColor(android.graphics.Color.parseColor("#CCFF5555")); // Semi-transparent red
-        closeTarget.setBackground(shape);
-
-        WindowManager.LayoutParams params = new WindowManager.LayoutParams(
-                160, 160,
-                Build.VERSION.SDK_INT >= Build.VERSION_CODES.O ?
-                        WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY :
-                        WindowManager.LayoutParams.TYPE_PHONE,
-                WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE | WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
-                PixelFormat.TRANSLUCENT);
-
-        params.gravity = Gravity.BOTTOM | Gravity.CENTER_HORIZONTAL;
-        params.y = 100;
-        windowManager.addView(closeTarget, params);
-    }
-
-    private void hideCloseTarget() {
-        if (closeTarget != null) {
-            windowManager.removeView(closeTarget);
-            closeTarget = null;
-            isOverCloseTarget = false;
+        try {
+            android.util.Log.d("ScreenCaptureService", "Adding bubble to WindowManager...");
+            windowManager.addView(floatingBubble, params);
+            android.util.Log.d("ScreenCaptureService", "Bubble added successfully");
+        } catch (Exception e) {
+            android.util.Log.e("ScreenCaptureService", "Failed to add bubble: " + e.getMessage());
+            android.widget.Toast.makeText(this, "Failed to show bubble. Check overlay permission.", android.widget.Toast.LENGTH_LONG).show();
         }
     }
 
-    private void checkCloseTargetCollision(float rawX, float rawY) {
-        if (closeTarget == null) return;
-        
-        // Get screen dimensions
-        android.util.DisplayMetrics metrics = getResources().getDisplayMetrics();
-        float screenWidth = metrics.widthPixels;
-        float screenHeight = metrics.heightPixels;
-        
-        // Target is at Bottom Center. 
-        // We detect if finger is in the bottom 30% of the screen AND within a wider horizontal range
-        boolean isNearBottom = rawY > (screenHeight * 0.70f);
-        boolean isNearHorizontalCenter = Math.abs(rawX - (screenWidth / 2f)) < 400;
-        
-        if (isNearBottom && isNearHorizontalCenter) { 
-            if (!isOverCloseTarget) {
-                isOverCloseTarget = true;
-                // Vibrate only once when entering target
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                    android.os.Vibrator v = (android.os.Vibrator) getSystemService(VIBRATOR_SERVICE);
-                    if (v != null) v.vibrate(android.os.VibrationEffect.createOneShot(70, android.os.VibrationEffect.DEFAULT_AMPLITUDE));
-                }
-                closeTarget.setScaleX(2.2f);
-                closeTarget.setScaleY(2.2f);
-                closeTarget.setText("RELEASE TO CLOSE"); 
-            }
-        } else {
-            if (isOverCloseTarget) {
-                isOverCloseTarget = false;
-                closeTarget.setScaleX(1.0f);
-                closeTarget.setScaleY(1.0f);
-                closeTarget.setText("X");
-            }
-        }
-    }
-
-    private void destroyBubble() {
-        if (floatingBubble != null) {
-            try {
-                if (floatingBubble.getParent() != null) {
-                    windowManager.removeView(floatingBubble);
-                }
-            } catch (Exception e) {}
-            floatingBubble = null;
-        }
-    }
-
-    private void showOptionsMenu(int x, int y) {
+    private void showOptionsMenu(int x, int y, SnippingOverlayView.OnSnipListener listener) {
         if (optionsMenu != null) return;
 
+        android.util.Log.d("ScreenCaptureService", "showOptionsMenu: Opening...");
         isMenuOpen = true;
         optionsMenu = new android.widget.LinearLayout(this);
-        optionsMenu.setOrientation(android.widget.LinearLayout.VERTICAL);
-        optionsMenu.setBackgroundColor(android.graphics.Color.parseColor("#1A1A1A")); // Dark gray background
+        optionsMenu.setOrientation(android.widget.LinearLayout.HORIZONTAL);
+        optionsMenu.setBackgroundResource(android.R.drawable.dialog_holo_dark_frame);
         optionsMenu.setPadding(10, 10, 10, 10);
-        
-        // Rounded corners for the container
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
-            android.graphics.drawable.GradientDrawable shape = new android.graphics.drawable.GradientDrawable();
-            shape.setCornerRadius(30f);
-            shape.setColor(android.graphics.Color.parseColor("#1A1A1A"));
-            shape.setStroke(2, android.graphics.Color.parseColor("#333333"));
-            optionsMenu.setBackground(shape);
-            optionsMenu.setElevation(20f);
-        }
 
         android.widget.Button btnEntire = new android.widget.Button(this);
         btnEntire.setText("Entire Screen");
-        btnEntire.setTextColor(android.graphics.Color.WHITE);
-        btnEntire.setAllCaps(false);
-        btnEntire.setBackgroundColor(android.graphics.Color.TRANSPARENT);
+        btnEntire.setTextSize(12);
         btnEntire.setOnClickListener(v -> {
             hideOptionsMenu();
-            floatingBubble.setVisibility(android.view.View.GONE);
+            if (floatingBubble != null) floatingBubble.setVisibility(android.view.View.GONE);
             showOverlay(rect -> {
                 hideOverlay();
-                floatingBubble.setVisibility(android.view.View.VISIBLE);
-                if (currentSnipListener != null) currentSnipListener.onSnipComplete(rect);
+                if (floatingBubble != null) floatingBubble.setVisibility(android.view.View.VISIBLE);
+                if (listener != null) listener.onSnipComplete(rect);
             });
         });
 
         android.widget.Button btnWithin = new android.widget.Button(this);
         btnWithin.setText("Within App");
-        btnWithin.setTextColor(android.graphics.Color.WHITE);
-        btnWithin.setAllCaps(false);
-        btnWithin.setBackgroundColor(android.graphics.Color.TRANSPARENT);
+        btnWithin.setTextSize(12);
         btnWithin.setOnClickListener(v -> {
-            android.widget.Toast.makeText(this, "Capturing current app only...", android.widget.Toast.LENGTH_SHORT).show();
             hideOptionsMenu();
-            floatingBubble.setVisibility(android.view.View.GONE);
+            if (floatingBubble != null) floatingBubble.setVisibility(android.view.View.GONE);
             showOverlay(rect -> {
                 hideOverlay();
-                floatingBubble.setVisibility(android.view.View.VISIBLE);
-                if (currentSnipListener != null) currentSnipListener.onSnipComplete(rect);
+                if (floatingBubble != null) floatingBubble.setVisibility(android.view.View.VISIBLE);
+                if (listener != null) listener.onSnipComplete(rect);
             });
         });
 
         android.widget.Button btnCancel = new android.widget.Button(this);
         btnCancel.setText("Cancel");
-        btnCancel.setTextColor(android.graphics.Color.parseColor("#FF5555")); // Reddish
-        btnCancel.setAllCaps(false);
-        btnCancel.setBackgroundColor(android.graphics.Color.TRANSPARENT);
-        btnCancel.setOnClickListener(v -> hideOptionsMenu());
+        btnCancel.setTextSize(12);
+        btnCancel.setOnClickListener(v -> {
+            hideOptionsMenu();
+        });
 
         optionsMenu.addView(btnEntire);
         optionsMenu.addView(btnWithin);
@@ -297,15 +189,18 @@ public class ScreenCaptureService extends Service {
                 Build.VERSION.SDK_INT >= Build.VERSION_CODES.O ?
                         WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY :
                         WindowManager.LayoutParams.TYPE_PHONE,
-                WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE | WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
+                WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE,
                 PixelFormat.TRANSLUCENT);
 
         params.gravity = Gravity.TOP | Gravity.START;
-        // Position dropdown below the bubble
-        params.x = x;
-        params.y = y + 140; 
+        params.x = x + 120; // Show next to bubble
+        params.y = y;
 
-        windowManager.addView(optionsMenu, params);
+        try {
+            windowManager.addView(optionsMenu, params);
+        } catch (Exception e) {
+            android.util.Log.e("ScreenCaptureService", "Failed to add optionsMenu: " + e.getMessage());
+        }
     }
 
     private void hideOptionsMenu() {
@@ -319,17 +214,27 @@ public class ScreenCaptureService extends Service {
     public void showOverlay(SnippingOverlayView.OnSnipListener listener) {
         if (overlayView == null) {
             overlayView = new SnippingOverlayView(this, rect -> {
-                // Keep overlay while we capture frame!
-                if (listener != null) listener.onSnipComplete(rect);
+                android.util.Log.d("ScreenCaptureService", "Overlay capture complete");
+                if (listener != null) {
+                    listener.onSnipComplete(rect);
+                } else {
+                    android.util.Log.w("ScreenCaptureService", "showOverlay: listener is NULL!");
+                }
             });
             WindowManager.LayoutParams params = new WindowManager.LayoutParams(
                     WindowManager.LayoutParams.MATCH_PARENT,
                     WindowManager.LayoutParams.MATCH_PARENT,
                     Build.VERSION.SDK_INT >= Build.VERSION_CODES.O ?
                             WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY :
-                            WindowManager.LayoutParams.TYPE_PHONE,
-                    WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE | WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
-                    PixelFormat.TRANSLUCENT);
+                    WindowManager.LayoutParams.TYPE_PHONE,
+            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE 
+                    | WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
+            PixelFormat.TRANSLUCENT);
+
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+        params.layoutInDisplayCutoutMode = WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES;
+    }
+
             params.gravity = Gravity.TOP | Gravity.START;
             windowManager.addView(overlayView, params);
         }

@@ -43,7 +43,6 @@ export default function App() {
   const [showCaptureOptions, setShowCaptureOptions] = useState(false);
   const [history, setHistory] = useState<HistoryItem[]>([]);
   const [isFloatingEnabled, setIsFloatingEnabled] = useState(false);
-  const isCheckingRef = useRef(false);
   
   // Load history from localStorage on start
   useEffect(() => {
@@ -64,26 +63,16 @@ export default function App() {
 
   // Define at component level for UI access
   const checkPending = async () => {
-    if (isCheckingRef.current) return false;
-    isCheckingRef.current = true;
-    
     try {
-      if (!isNativeMobile) {
-        isCheckingRef.current = false;
-        return false;
-      }
-      console.log("APP: Checking for pending snip...");
+      if (!isNativeMobile) return;
       const pending = await ScreenCapture.checkPendingCapture();
       if (pending && pending.value) {
-        console.log("APP: Found pending capture! Data size:", Math.round(pending.value.length / 1024), "KB");
+        console.log("APP: Found pending capture! Size:", Math.round(pending.value.length / 1024), "KB");
         loadIntoExtractPage(pending.value);
-        isCheckingRef.current = false;
         return true;
       }
     } catch (e) {
-      console.error("APP: checkPendingCapture failed:", e);
-    } finally {
-      isCheckingRef.current = false;
+      console.error("APP: checking pending failed", e);
     }
     return false;
   };
@@ -175,7 +164,7 @@ export default function App() {
                      "Maintain vertical and horizontal layout if possible. " +
                      "Do not summarize. Do not add notes or preamble.";
       
-      const text = await extractTextFromImage(base64Data);
+      const text = await extractTextFromImage(base64Data, prompt);
       console.log("APP: Extraction successful, text length:", text.length);
       setExtractedText(text);
       setAppState('result');
@@ -517,14 +506,7 @@ export default function App() {
                       setShowCaptureOptions(false);
                       if (isNativeMobile) {
                         try {
-                          // Allow modal to close
-                          await new Promise(r => setTimeout(r, 200));
-                          
-                          // No timeout here, since user needs time to click the Android permission prompt!
-                          const capturePromise = ScreenCapture.startCapture();
-                          
-                          const result = await capturePromise as any;
-                          
+                          const result = await ScreenCapture.startCapture() as any;
                           if (result && result.value) {
                             loadIntoExtractPage(result.value);
                           }
@@ -549,14 +531,8 @@ export default function App() {
                       setShowCaptureOptions(false);
                       if (isNativeMobile) {
                         try {
-                          // Small delay so modal fully closes before overlay appears
-                          await new Promise(r => setTimeout(r, 200));
-                          
-                          // captureInsideApp now shows native snip overlay first;
-                          // it resolves only after user draws a region — returned image is already cropped.
                           const result = await ScreenCapture.captureInsideApp() as any;
                           if (result && result.value) {
-                            // Image is already cropped — go straight to Extract page
                             loadIntoExtractPage(result.value);
                           }
                         } catch (err: any) {

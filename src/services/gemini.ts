@@ -1,5 +1,5 @@
 export async function extractTextFromImage(base64Image: string, customPrompt?: string): Promise<string> {
-  let apiKey = (import.meta as any).env.VITE_GEMINI_API_KEY;
+  let apiKey = import.meta.env.VITE_GEMINI_API_KEY;
   
   if (apiKey) {
     apiKey = apiKey.trim().replace(/^["']|["']$/g, '');

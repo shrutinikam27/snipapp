@@ -15,8 +15,10 @@ public class SnippingOverlayView extends View {
     private final Paint paint;
     private final Paint transparentPaint;
     private final RectF snipRect = new RectF();
+    private final RectF cancelBtnRect = new RectF();
     private float startX, startY;
     private OnSnipListener listener;
+    private boolean isCancelSelected = false;
 
     public interface OnSnipListener {
         void onSnipComplete(RectF rect);
@@ -72,6 +74,24 @@ public class SnippingOverlayView extends View {
             hintPaint.setTextAlign(Paint.Align.CENTER);
             canvas.drawText("Drag to snip", getWidth() / 2f, getHeight() / 2f, hintPaint);
         }
+
+        // Draw Cancel button in top right
+        float padding = 50;
+        float btnWidth = 250;
+        float btnHeight = 100;
+        cancelBtnRect.set(getWidth() - btnWidth - padding, padding, getWidth() - padding, padding + btnHeight);
+        
+        Paint btnPaint = new Paint();
+        btnPaint.setColor(isCancelSelected ? Color.parseColor("#FF5252") : Color.parseColor("#424242"));
+        btnPaint.setAntiAlias(true);
+        canvas.drawRoundRect(cancelBtnRect, 15, 15, btnPaint);
+
+        Paint textPaint = new Paint();
+        textPaint.setColor(Color.WHITE);
+        textPaint.setTextSize(40);
+        textPaint.setAntiAlias(true);
+        textPaint.setTextAlign(Paint.Align.CENTER);
+        canvas.drawText("CANCEL", cancelBtnRect.centerX(), cancelBtnRect.centerY() + 15, textPaint);
     }
 
     @Override
@@ -81,6 +101,12 @@ public class SnippingOverlayView extends View {
 
         switch (event.getAction()) {
             case MotionEvent.ACTION_DOWN:
+                if (cancelBtnRect.contains(x, y)) {
+                    isCancelSelected = true;
+                    invalidate();
+                    return true;
+                }
+                isCancelSelected = false;
                 startX = x;
                 startY = y;
                 snipRect.set(startX, startY, startX, startY);
@@ -88,6 +114,14 @@ public class SnippingOverlayView extends View {
                 break;
 
             case MotionEvent.ACTION_MOVE:
+                if (isCancelSelected) {
+                    boolean nowInside = cancelBtnRect.contains(x, y);
+                    if (nowInside != isCancelSelected) {
+                        isCancelSelected = nowInside;
+                        invalidate();
+                    }
+                    return true;
+                }
                 snipRect.set(
                         Math.min(startX, x),
                         Math.min(startY, y),
@@ -97,6 +131,17 @@ public class SnippingOverlayView extends View {
                 break;
 
             case MotionEvent.ACTION_UP:
+                if (isCancelSelected) {
+                    isCancelSelected = false;
+                    if (cancelBtnRect.contains(x, y)) {
+                        if (listener != null) {
+                            listener.onSnipComplete(null);
+                        }
+                    } else {
+                        invalidate();
+                    }
+                    return true;
+                }
                 if (snipRect.width() > 10 && snipRect.height() > 10) {
                     if (listener != null) {
                         // Vibrate to signal selection complete
@@ -108,14 +153,14 @@ public class SnippingOverlayView extends View {
                                 v.vibrate(25);
                             }
                         }
-                        listener.onSnipComplete(snipRect);
+                        listener.onSnipComplete(new RectF(snipRect));
                     }
                 } else {
                     // Cancel selection if it's too small
                     snipRect.setEmpty();
                     invalidate();
                     if (listener != null) {
-                        listener.onSnipComplete(snipRect);
+                        listener.onSnipComplete(new RectF(snipRect));
                     }
                 }
                 break;
