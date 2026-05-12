@@ -137,11 +137,14 @@ export default function App() {
     setCompletedCrop(initialCrop);
   };
 
-  const loadIntoExtractPage = (imageSrc: string) => {
-    console.log("APP: loadIntoExtractPage called. Current state:", appState);
-    // If we're loading from a native capture, we've already done the visual selection.
-    // So go STRAIGHT to OCR result to wowe the user.
-    processImageForOCR(imageSrc);
+  const loadIntoExtractPage = (imageSrc: string, skipCrop = true) => {
+    console.log("APP: loadIntoExtractPage called. skipCrop:", skipCrop);
+    if (skipCrop) {
+      processImageForOCR(imageSrc);
+    } else {
+      setImgSrc(imageSrc);
+      setAppState('crop');
+    }
   };
 
 
@@ -513,6 +516,30 @@ export default function App() {
                         } catch (err: any) {
                           console.error("Entire screen capture failed:", err);
                         }
+                      } else {
+                        // Web Fallback for browsers
+                        try {
+                          const stream = await navigator.mediaDevices.getDisplayMedia({ video: true });
+                          const video = document.createElement('video');
+                          video.srcObject = stream;
+                          video.play();
+                          
+                          video.onloadedmetadata = () => {
+                            setTimeout(() => {
+                              const canvas = document.createElement('canvas');
+                              canvas.width = video.videoWidth;
+                              canvas.height = video.videoHeight;
+                              const ctx = canvas.getContext('2d');
+                              ctx?.drawImage(video, 0, 0);
+                              const base64 = canvas.toDataURL('image/jpeg');
+                              loadIntoExtractPage(base64, false); // Web capture needs cropping
+                              stream.getTracks().forEach(track => track.stop());
+                            }, 500);
+                          };
+                        } catch (err) {
+                          console.error("Web capture failed:", err);
+                          alert("Screen capture is not supported or was cancelled.");
+                        }
                       }
                     }}
                     className="flex items-center gap-4 p-4 rounded-2xl bg-indigo-600/10 hover:bg-indigo-600/20 border border-indigo-600/20 transition-all"
@@ -539,7 +566,8 @@ export default function App() {
                           console.error("Capture Error:", err);
                         }
                       } else {
-                        alert("Native capture is only available on Android/iOS.");
+                        // For Within App on web, we can also use getDisplayMedia or just tell them to import
+                        alert("For web, please use 'Entire Screen' and select the current tab, or use 'Import'.");
                       }
                     }}
                     className="flex items-center gap-4 p-4 rounded-2xl bg-white/5 hover:bg-white/10 border border-white/10 transition-all font-sans"
