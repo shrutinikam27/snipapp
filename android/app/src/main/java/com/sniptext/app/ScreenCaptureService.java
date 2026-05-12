@@ -102,24 +102,31 @@ public class ScreenCaptureService extends Service {
                         initialTouchX = event.getRawX();
                         initialTouchY = event.getRawY();
                         return true;
+                    case android.view.MotionEvent.ACTION_MOVE:
+                        params.x = (int) (initialX + (event.getRawX() - initialTouchX));
+                        params.y = (int) (initialY + (event.getRawY() - initialTouchY));
+                        
+                        // Bound check (keep on screen)
+                        android.util.DisplayMetrics metrics = new android.util.DisplayMetrics();
+                        windowManager.getDefaultDisplay().getRealMetrics(metrics);
+                        params.x = Math.max(0, Math.min(params.x, metrics.widthPixels - 160));
+                        params.y = Math.max(0, Math.min(params.y, metrics.heightPixels - 160));
+                        
+                        try {
+                            windowManager.updateViewLayout(floatingBubble, params);
+                        } catch (Exception e) {}
+                        return true;
                     case android.view.MotionEvent.ACTION_UP:
                         int diffX = (int) (event.getRawX() - initialTouchX);
                         int diffY = (int) (event.getRawY() - initialTouchY);
+                        // If it was a tap (not a drag)
                         if (Math.abs(diffX) < 15 && Math.abs(diffY) < 15) {
-                            android.util.Log.d("ScreenCaptureService", "Bubble clicked!");
                             if (!isMenuOpen) {
                                 showOptionsMenu(params.x, params.y, listener);
                             } else {
                                 hideOptionsMenu();
                             }
                         }
-                        return true;
-                    case android.view.MotionEvent.ACTION_MOVE:
-                        params.x = (int) (initialX + (event.getRawX() - initialTouchX));
-                        params.y = (int) (initialY + (event.getRawY() - initialTouchY));
-                        try {
-                            windowManager.updateViewLayout(floatingBubble, params);
-                        } catch (Exception e) {}
                         return true;
                 }
                 return false;

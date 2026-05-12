@@ -80,9 +80,10 @@ public class ScreenCapturePlugin extends Plugin {
             } else {
                 android.util.Log.d("ScreenCapture", "handleBubbleCapture: MediaProjection null, requesting...");
                 if (getContext() != null) {
-                    android.widget.Toast.makeText(getContext(), "Permission needed", android.widget.Toast.LENGTH_SHORT).show();
+                    android.widget.Toast.makeText(getContext(), "Setting up screen access...", android.widget.Toast.LENGTH_SHORT).show();
                 }
-                startCapture(null);
+                bringAppToFront(); // Bring app to front to show the permission dialog
+                new Handler(Looper.getMainLooper()).postDelayed(() -> startCapture(null), 1000);
             }
         });
     }
@@ -100,6 +101,15 @@ public class ScreenCapturePlugin extends Plugin {
                     call.reject("Overlay Permission not granted");
                     return;
                 }
+            }
+
+            // NEW: If we don't have media projection yet, we MUST request it while the app is in the foreground.
+            if (mediaProjection == null) {
+                android.util.Log.d("ScreenCapture", "enableFloating: MediaProjection null, requesting permission first...");
+                projectionManager = (MediaProjectionManager) getActivity().getSystemService(Context.MEDIA_PROJECTION_SERVICE);
+                Intent captureIntent = projectionManager.createScreenCaptureIntent();
+                startActivityForResult(call, captureIntent, "captureResult");
+                return;
             }
 
             android.util.Log.d("ScreenCapture", "enableFloating: Starting service...");
@@ -256,108 +266,101 @@ public class ScreenCapturePlugin extends Plugin {
 
     @ActivityCallback
     public void captureResult(PluginCall call, ActivityResult result) {
-        android.util.Log.d("ScreenCapture", "captureResult: resultCode=" + result.getResultCode());
         if (result.getResultCode() == Activity.RESULT_OK && result.getData() != null) {
             try {
-                mediaProjection = projectionManager.getMediaProjection(result.getResultCode(), result.getData());
-                if (mediaProjection == null) {
-                    android.util.Log.e("ScreenCapture", "mediaProjection is NULL after getMediaProjection!");
-                    if (call != null) call.reject("Failed to get MediaProjection (null)");
-                    return;
+                // REQUIRED for Android 14+: Service must be running BEFORE getMediaProjection
+                Intent intent = new Intent(getContext(), ScreenCaptureService.class);
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                    getContext().startForegroundService(intent);
+                } else {
+                    getContext().startService(intent);
                 }
-                
-                android.util.Log.d("ScreenCapture", "mediaProjection successfully initialized");
+
+                mediaProjection = projectionManager.getMediaProjection(result.getResultCode(), result.getData());
                 
                 mediaProjection.registerCallback(new MediaProjection.Callback() {
                     @Override
                     public void onStop() {
-                        android.util.Log.d("ScreenCapture", "MediaProjection stopped by system");
-                        stopCapture();
+                        cleanup();
                     }
                 }, new Handler(Looper.getMainLooper()));
 
-                new Handler(Looper.getMainLooper()).postDelayed(() -> {
-                    ScreenCaptureService service = ScreenCaptureService.getInstance();
-                    if (service != null) {
-                        android.util.Log.d("ScreenCapture", "Service active, showing overlay...");
-                        service.showOverlay(rect -> takeScreenshot(call, rect));
-                        getActivity().moveTaskToBack(true);
-                    } else {
-                        android.util.Log.e("ScreenCapture", "Service NOT found in captureResult!");
-                        if (call != null) call.reject("Screen capture service not ready");
+                // Wait for service to be fully ready before showing UI
+                new Handler(Looper.getMainLooper()).postDelayed(new Runnable() {
+                    int retries = 0;
+                    @Override
+                    public void run() {
+                        ScreenCaptureService service = ScreenCaptureService.getInstance();
+                        if (service != null) {
+                            if (call != null && "enableFloating".equals(call.getMethodName())) {
+                                service.showFloatingBubble(rect -> handleBubbleCapture(rect));
+                                call.resolve();
+                            } else {
+                                service.showOverlay(rect -> takeScreenshot(call, rect));
+                                getActivity().moveTaskToBack(true);
+                            }
+                        } else if (retries < 10) {
+                            retries++;
+                            new Handler(Looper.getMainLooper()).postDelayed(this, 300);
+                        } else {
+                            if (call != null) call.reject("Service initialization timeout");
+                        }
                     }
                 }, 500);
             } catch (Exception e) {
-                android.util.Log.e("ScreenCapture", "Error in captureResult: " + e.getMessage());
-                if (call != null) call.reject("Failed to initialize capture: " + e.getMessage());
+                if (call != null) call.reject(e.getMessage());
             }
         } else {
-            android.util.Log.w("ScreenCapture", "Capture permission denied or cancelled");
             if (call != null) call.reject("User cancelled");
         }
     }
 
-    private void takeScreenshot(final PluginCall call, final android.graphics.RectF snipRect) {
-        if (mediaProjection == null) {
-            android.util.Log.e("ScreenCapture", "takeScreenshot: No MediaProjection!");
-            if (getContext() != null) {
-                android.widget.Toast.makeText(getContext(), "Capture failed: No permission", android.widget.Toast.LENGTH_SHORT).show();
-            }
-            return;
-        }
-
-        android.util.Log.d("ScreenCapture", "takeScreenshot: Starting capture process...");
-
-        DisplayMetrics metrics = new DisplayMetrics();
-        WindowManager wm = (WindowManager) getContext().getSystemService(Context.WINDOW_SERVICE);
-        wm.getDefaultDisplay().getRealMetrics(metrics);
-        int w = metrics.widthPixels, h = metrics.heightPixels;
-
-        android.util.Log.d("ScreenCapture", "takeScreenshot: Screen size " + w + "x" + h + " dpi=" + metrics.densityDpi);
-
-        imageReader = ImageReader.newInstance(w, h, PixelFormat.RGBA_8888, 2);
-        virtualDisplay = mediaProjection.createVirtualDisplay("Snip", w, h, metrics.densityDpi, 
-                DisplayManager.VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR, imageReader.getSurface(), null, null);
-
-        android.util.Log.d("ScreenCapture", "takeScreenshot: VirtualDisplay created");
-
-        // Hide overlay AFTER virtual display is attached so the screen redraws and pushes a frame!
-        ScreenCaptureService service = ScreenCaptureService.getInstance();
-        if (service != null) {
-            android.util.Log.d("ScreenCapture", "takeScreenshot: Hiding overlay to trigger frame");
-            service.hideOverlay();
-        }
-
-        imageReader.setOnImageAvailableListener(reader -> {
-            android.util.Log.d("ScreenCapture", "onImageAvailable: Frame received!");
+    private void takeScreenshot(final PluginCall call, final android.graphics.RectF rect) {
+        getActivity().runOnUiThread(() -> {
             try {
-                Image img = reader.acquireNextImage(); 
-                if (img != null) {
-                    android.util.Log.d("ScreenCapture", "onImageAvailable: Processing image...");
-                    processCapturedImage(call, img, snipRect, w, h);
-                    img.close();
-                    cleanupVirtualResources();
-                } else {
-                    android.util.Log.w("ScreenCapture", "onImageAvailable: Received NULL image");
+                if (mediaProjection == null) {
+                    if (call != null) call.reject("No permission");
+                    return;
                 }
+
+                DisplayMetrics metrics = new DisplayMetrics();
+                getActivity().getWindowManager().getDefaultDisplay().getRealMetrics(metrics);
+                int w = metrics.widthPixels;
+                int h = metrics.heightPixels;
+
+                imageReader = ImageReader.newInstance(w, h, PixelFormat.RGBA_8888, 2);
+                virtualDisplay = mediaProjection.createVirtualDisplay("Snip", w, h, metrics.densityDpi,
+                        DisplayManager.VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR, imageReader.getSurface(), null, null);
+
+                ScreenCaptureService service = ScreenCaptureService.getInstance();
+                if (service != null) service.hideOverlay();
+
+                imageReader.setOnImageAvailableListener(reader -> {
+                    try {
+                        Image img = reader.acquireNextImage(); 
+                        if (img != null) {
+                            processCapturedImage(call, img, rect, w, h);
+                            img.close();
+                            cleanup();
+                        }
+                    } catch (Exception e) {
+                        if (call != null) call.reject(e.getMessage());
+                        cleanup();
+                    }
+                }, new Handler(Looper.getMainLooper()));
+                
+                new Handler(Looper.getMainLooper()).postDelayed(() -> {
+                    if (virtualDisplay != null) {
+                        cleanup();
+                        if (call != null) call.reject("Timeout");
+                    }
+                }, 4000); 
+
             } catch (Exception e) {
-                android.util.Log.e("ScreenCapture", "Capture listener error: " + e.getMessage());
-                if (call != null) call.reject("Failed to capture frame: " + e.getMessage());
-                cleanupVirtualResources();
+                cleanup();
+                if (call != null) call.reject(e.getMessage());
             }
-        }, new Handler(Looper.getMainLooper()));
-        
-        // Timeout mechanism: If no frame arrives in 3 seconds, cleanup and log error
-        new Handler(Looper.getMainLooper()).postDelayed(() -> {
-            if (virtualDisplay != null) {
-                android.util.Log.e("ScreenCapture", "TIMEOUT: No frame received from virtual display");
-                if (getContext() != null) {
-                    android.widget.Toast.makeText(getContext(), "Capture timeout. Try moving the screen slightly.", android.widget.Toast.LENGTH_SHORT).show();
-                }
-                cleanupVirtualResources();
-                if (call != null) call.reject("Capture timeout");
-            }
-        }, 4000); // Increased to 4s
+        });
     }
 
     private void processCapturedImage(PluginCall call, Image image, android.graphics.RectF rect, int w, int h) {
@@ -396,23 +399,27 @@ public class ScreenCapturePlugin extends Plugin {
 
     private void bringAppToFront() {
         new Handler(Looper.getMainLooper()).postDelayed(() -> {
-            Context context = getContext();
-            Intent intent = context.getPackageManager().getLaunchIntentForPackage(context.getPackageName());
-            if (intent != null) {
-                intent.setFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_REORDER_TO_FRONT);
-                context.startActivity(intent);
+            try {
+                Context context = getContext();
+                Intent intent = context.getPackageManager().getLaunchIntentForPackage(context.getPackageName());
+                if (intent != null) {
+                    intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_SINGLE_TOP | Intent.FLAG_ACTIVITY_REORDER_TO_FRONT);
+                    context.startActivity(intent);
+                }
+            } catch (Exception e) {
+                android.util.Log.e("ScreenCapture", "Failed to bring app to front: " + e.getMessage());
             }
-        }, 500);
+        }, 300);
     }
 
-    private void cleanupVirtualResources() {
+    private void cleanup() {
         if (virtualDisplay != null) { virtualDisplay.release(); virtualDisplay = null; }
         if (imageReader != null) { imageReader.close(); imageReader = null; }
+        if (mediaProjection != null) { mediaProjection.stop(); mediaProjection = null; }
     }
 
     private void stopCapture() {
-        cleanupVirtualResources();
-        if (mediaProjection != null) { mediaProjection.stop(); mediaProjection = null; }
+        cleanup();
         stopService();
     }
 

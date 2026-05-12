@@ -148,13 +148,22 @@ export default function App() {
   };
 
 
+  const isProcessingRef = useRef(false);
+  const [isExtracting, setIsExtracting] = useState(false);
+
   const processImageForOCR = async (imageSrc: string) => {
+    if (isProcessingRef.current) {
+        console.log("APP: Extraction already in progress (ref lock), skipping.");
+        return;
+    }
     console.log("APP: processImageForOCR starting...");
     if (!imageSrc) {
       console.warn("APP: Empty image source passed to OCR");
       return;
     }
     
+    isProcessingRef.current = true;
+    setIsExtracting(true);
     setImgSrc(imageSrc);
     setAppState('loading');
     
@@ -200,6 +209,9 @@ export default function App() {
       console.error("OCR failed:", err);
       setExtractedText(err?.message ? `Failed to process image: ${err.message}` : "Failed to process image.");
       setAppState('result');
+    } finally {
+      setIsExtracting(false);
+      isProcessingRef.current = false;
     }
   };
   
